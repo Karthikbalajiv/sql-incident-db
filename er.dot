@@ -1,0 +1,19 @@
+digraph ER {
+  graph [rankdir=LR, fontname="Helvetica", nodesep=0.5, ranksep=0.9, bgcolor="white"];
+  node  [shape=plain, fontname="Helvetica", fontsize=10];
+  edge  [fontname="Helvetica", fontsize=9, color="#444444", arrowhead=crow, arrowtail=tee, dir=both];
+  region   [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#1f3a5f"><font color="white"><b>region</b></font></td></tr><tr><td align="left"><u>region_code</u> PK</td></tr><tr><td align="left">region_name</td></tr><tr><td align="left">cloud_provider</td></tr></table>>];
+  severity [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#1f3a5f"><font color="white"><b>severity</b></font></td></tr><tr><td align="left"><u>severity_code</u> PK</td></tr><tr><td align="left">sla_hours</td></tr></table>>];
+  engineer [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#1f3a5f"><font color="white"><b>engineer</b></font></td></tr><tr><td align="left"><u>engineer_id</u> PK</td></tr><tr><td align="left">full_name</td></tr><tr><td align="left">email UQ</td></tr></table>>];
+  team     [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#1f3a5f"><font color="white"><b>team</b></font></td></tr><tr><td align="left"><u>team_id</u> PK</td></tr><tr><td align="left">team_name UQ</td></tr><tr><td align="left">manager_id FK</td></tr></table>>];
+  service  [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#1f3a5f"><font color="white"><b>service</b></font></td></tr><tr><td align="left"><u>service_id</u> PK</td></tr><tr><td align="left">service_name UQ</td></tr><tr><td align="left">tier</td></tr><tr><td align="left">team_id FK</td></tr><tr><td align="left">region_code FK</td></tr></table>>];
+  incident [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#1f3a5f"><font color="white"><b>incident</b></font></td></tr><tr><td align="left"><u>incident_id</u> PK</td></tr><tr><td align="left">incident_ref UQ</td></tr><tr><td align="left">service_id FK</td></tr><tr><td align="left">severity_code FK</td></tr><tr><td align="left">opened_at</td></tr><tr><td align="left">resolved_at</td></tr></table>>];
+  ir       [label=<<table border="0" cellborder="1" cellspacing="0" cellpadding="4"><tr><td bgcolor="#7a3e00"><font color="white"><b>incident_responder</b></font></td></tr><tr><td align="left"><u>incident_id</u> PK, FK</td></tr><tr><td align="left"><u>engineer_id</u> PK, FK</td></tr><tr><td align="left">role</td></tr></table>>];
+  engineer -> team     [label="manages"];
+  team     -> service  [label="owns"];
+  region   -> service  [label="hosts"];
+  service  -> incident [label="raises"];
+  severity -> incident [label="classifies"];
+  incident -> ir;
+  engineer -> ir;
+}

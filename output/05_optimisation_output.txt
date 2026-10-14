@@ -1,0 +1,158 @@
+SET
+SET
+DROP INDEX
+=== CASE 1 BEFORE ===
+                                                                                QUERY PLAN                                                                                
+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Seq Scan on incident  (cost=0.00..40238.07 rows=346 width=32) (actual time=3.774..163.419 rows=331 loops=1)
+   Filter: ((opened_at >= '2026-07-01 00:00:00'::timestamp without time zone) AND (opened_at < '2026-10-01 00:00:00'::timestamp without time zone) AND (service_id = 42))
+   Rows Removed by Filter: 1499673
+   Buffers: shared hit=7844 read=6144
+ Planning:
+   Buffers: shared hit=93
+ Planning Time: 6.372 ms
+ Execution Time: 163.550 ms
+(8 rows)
+
+CREATE INDEX
+ANALYZE
+=== CASE 1 AFTER ===
+                                                                                     QUERY PLAN                                                                                     
+------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Bitmap Heap Scan on incident  (cost=12.79..1213.15 rows=342 width=32) (actual time=0.445..2.524 rows=331 loops=1)
+   Recheck Cond: ((service_id = 42) AND (opened_at >= '2026-07-01 00:00:00'::timestamp without time zone) AND (opened_at < '2026-10-01 00:00:00'::timestamp without time zone))
+   Heap Blocks: exact=324
+   Buffers: shared hit=324 read=4
+   ->  Bitmap Index Scan on ix_incident_service_opened  (cost=0.00..12.70 rows=342 width=0) (actual time=0.291..0.292 rows=331 loops=1)
+         Index Cond: ((service_id = 42) AND (opened_at >= '2026-07-01 00:00:00'::timestamp without time zone) AND (opened_at < '2026-10-01 00:00:00'::timestamp without time zone))
+         Buffers: shared read=4
+ Planning:
+   Buffers: shared hit=19 read=1
+ Planning Time: 1.939 ms
+ Execution Time: 2.917 ms
+(11 rows)
+
+=== CASE 2 BEFORE ===
+                                                             QUERY PLAN                                                             
+------------------------------------------------------------------------------------------------------------------------------------
+ HashAggregate  (cost=56556.73..56556.75 rows=2 width=18) (actual time=394.374..394.378 rows=2 loops=1)
+   Group Key: role
+   Batches: 1  Memory Usage: 24kB
+   Buffers: shared hit=3567 read=15504
+   ->  Seq Scan on incident_responder ir  (cost=0.00..56497.12 rows=11921 width=10) (actual time=0.152..385.677 rows=11876 loops=1)
+         Filter: (engineer_id = 17)
+         Rows Removed by Filter: 2982214
+         Buffers: shared hit=3567 read=15504
+ Planning:
+   Buffers: shared hit=46
+ Planning Time: 0.705 ms
+ Execution Time: 394.452 ms
+(12 rows)
+
+CREATE INDEX
+ANALYZE
+=== CASE 2 AFTER ===
+                                                                            QUERY PLAN                                                                             
+-------------------------------------------------------------------------------------------------------------------------------------------------------------------
+ GroupAggregate  (cost=0.43..313.26 rows=2 width=18) (actual time=1.318..2.271 rows=2 loops=1)
+   Group Key: role
+   Buffers: shared hit=1 read=13
+   ->  Index Only Scan using ix_responder_engineer on incident_responder ir  (cost=0.43..253.50 rows=11947 width=10) (actual time=0.035..1.206 rows=11876 loops=1)
+         Index Cond: (engineer_id = 17)
+         Heap Fetches: 0
+         Buffers: shared hit=1 read=13
+ Planning:
+   Buffers: shared hit=13 read=1
+ Planning Time: 0.221 ms
+ Execution Time: 2.305 ms
+(11 rows)
+
+CREATE INDEX
+ANALYZE
+=== CASE 3 BEFORE (function on column, index exists but unusable) ===
+                                                     QUERY PLAN                                                     
+--------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=36506.81..36506.82 rows=1 width=8) (actual time=488.797..488.799 rows=1 loops=1)
+   Buffers: shared hit=8068 read=5920
+   ->  Seq Scan on incident  (cost=0.00..36488.06 rows=7500 width=0) (actual time=1.553..488.158 rows=1466 loops=1)
+         Filter: (date_trunc('day'::text, opened_at) = '2026-09-15 00:00:00'::timestamp without time zone)
+         Rows Removed by Filter: 1498538
+         Buffers: shared hit=8068 read=5920
+ Planning:
+   Buffers: shared hit=15 read=1
+ Planning Time: 0.276 ms
+ Execution Time: 488.898 ms
+(10 rows)
+
+=== CASE 3 AFTER (same result, sargable range) ===
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Aggregate  (cost=47.91..47.92 rows=1 width=8) (actual time=0.481..0.482 rows=1 loops=1)
+   Buffers: shared hit=3 read=5
+   ->  Index Only Scan using ix_incident_opened on incident  (cost=0.43..44.41 rows=1399 width=0) (actual time=0.021..0.357 rows=1466 loops=1)
+         Index Cond: ((opened_at >= '2026-09-15 00:00:00'::timestamp without time zone) AND (opened_at < '2026-09-16 00:00:00'::timestamp without time zone))
+         Heap Fetches: 0
+         Buffers: shared hit=3 read=5
+ Planning:
+   Buffers: shared hit=5 read=3
+ Planning Time: 0.473 ms
+ Execution Time: 0.515 ms
+(10 rows)
+
+=== CASE 4 BEFORE ===
+                                                                          QUERY PLAN                                                                          
+--------------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.57..704.41 rows=50 width=31) (actual time=0.420..11.913 rows=50 loops=1)
+   Buffers: shared hit=9547 read=26
+   ->  Nested Loop  (cost=0.57..99860.53 rows=7094 width=31) (actual time=0.418..11.902 rows=50 loops=1)
+         Buffers: shared hit=9547 read=26
+         ->  Index Scan Backward using ix_incident_opened on incident i  (cost=0.43..98666.39 rows=7094 width=28) (actual time=0.403..11.670 rows=50 loops=1)
+               Filter: ((resolved_at IS NULL) AND (severity_code = ANY ('{SEV1,SEV2}'::text[])))
+               Rows Removed by Filter: 9368
+               Buffers: shared hit=9447 read=26
+         ->  Index Scan using service_pkey on service s  (cost=0.15..0.17 rows=1 width=11) (actual time=0.003..0.003 rows=1 loops=50)
+               Index Cond: (service_id = i.service_id)
+               Buffers: shared hit=100
+ Planning:
+   Buffers: shared hit=104 read=4
+ Planning Time: 1.090 ms
+ Execution Time: 11.961 ms
+(15 rows)
+
+CREATE INDEX
+ANALYZE
+=== CASE 4 AFTER ===
+                                                                       QUERY PLAN                                                                       
+--------------------------------------------------------------------------------------------------------------------------------------------------------
+ Limit  (cost=0.44..162.98 rows=50 width=31) (actual time=0.048..0.344 rows=50 loops=1)
+   Buffers: shared hit=142 read=2
+   ->  Nested Loop  (cost=0.44..23116.48 rows=7111 width=31) (actual time=0.047..0.332 rows=50 loops=1)
+         Buffers: shared hit=142 read=2
+         ->  Index Scan using ix_incident_open_queue on incident i  (cost=0.28..22871.49 rows=7111 width=28) (actual time=0.030..0.165 rows=50 loops=1)
+               Buffers: shared hit=50 read=2
+         ->  Memoize  (cost=0.16..0.18 rows=1 width=11) (actual time=0.003..0.003 rows=1 loops=50)
+               Cache Key: i.service_id
+               Cache Mode: logical
+               Hits: 4  Misses: 46  Evictions: 0  Overflows: 0  Memory Usage: 6kB
+               Buffers: shared hit=92
+               ->  Index Scan using service_pkey on service s  (cost=0.15..0.17 rows=1 width=11) (actual time=0.002..0.002 rows=1 loops=46)
+                     Index Cond: (service_id = i.service_id)
+                     Buffers: shared hit=92
+ Planning:
+   Buffers: shared hit=39 read=1
+ Planning Time: 0.644 ms
+ Execution Time: 0.388 ms
+(18 rows)
+
+=== Index sizes ===
+           index            |  size  
+----------------------------+--------
+ incident_responder_pkey    | 90 MB
+ incident_incident_ref_key  | 60 MB
+ ix_incident_service_opened | 45 MB
+ ix_incident_opened         | 32 MB
+ incident_pkey              | 32 MB
+ ix_responder_engineer      | 20 MB
+ ix_incident_open_queue     | 176 kB
+(7 rows)
+

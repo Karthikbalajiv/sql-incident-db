@@ -1,0 +1,208 @@
+SET search_path = ops;
+SET
+SELECT t.team_name,
+       date_trunc('quarter', i.opened_at)::date               AS quarter,
+       count(*)                                               AS incidents,
+       count(*) FILTER (WHERE i.resolved_at > i.opened_at + make_interval(hours => sv.sla_hours)
+                          OR i.resolved_at IS NULL)           AS breaches,
+       round(100.0 * count(*) FILTER (WHERE i.resolved_at > i.opened_at + make_interval(hours => sv.sla_hours)
+                          OR i.resolved_at IS NULL) / count(*), 1) AS breach_pct
+FROM incident i
+JOIN severity sv USING (severity_code)
+JOIN service  s  USING (service_id)
+JOIN team     t  USING (team_id)
+WHERE i.opened_at >= '2026-01-01'
+GROUP BY t.team_name, date_trunc('quarter', i.opened_at)
+HAVING count(*) > 100
+ORDER BY breach_pct DESC
+LIMIT 10;
+ team_name |  quarter   | incidents | breaches | breach_pct 
+-----------+------------+-----------+----------+------------
+ Team 18   | 2026-04-01 |      5461 |     2216 |       40.6
+ Team 22   | 2026-01-01 |      5088 |     2046 |       40.2
+ Team 16   | 2026-07-01 |      5448 |     2190 |       40.2
+ Team 4    | 2026-07-01 |      5467 |     2199 |       40.2
+ Identity  | 2026-01-01 |      5750 |     2301 |       40.0
+ Team 17   | 2026-04-01 |      5445 |     2180 |       40.0
+ Team 21   | 2026-01-01 |      5146 |     2059 |       40.0
+ Team 5    | 2026-01-01 |      5485 |     2190 |       39.9
+ Platform  | 2026-07-01 |      5791 |     2308 |       39.9
+ Team 14   | 2026-04-01 |      5319 |     2120 |       39.9
+(10 rows)
+
+WITH mttr AS (
+    SELECT s.team_id, s.service_name,
+           avg(i.resolved_at - i.opened_at) AS mean_ttr,
+           count(*)                          AS resolved
+    FROM incident i
+    JOIN service s USING (service_id)
+    WHERE i.resolved_at IS NOT NULL
+      AND i.severity_code IN ('SEV1','SEV2')
+    GROUP BY s.team_id, s.service_name
+), ranked AS (
+    SELECT m.*, DENSE_RANK() OVER (PARTITION BY team_id ORDER BY mean_ttr DESC) AS rnk
+    FROM mttr m
+)
+SELECT t.team_name, r.service_name, justify_hours(date_trunc('minute', r.mean_ttr)) AS mean_ttr, r.resolved, r.rnk
+FROM ranked r JOIN team t USING (team_id)
+WHERE r.rnk <= 3
+ORDER BY t.team_name, r.rnk
+LIMIT 12;
+ team_name | service_name | mean_ttr | resolved | rnk 
+-----------+--------------+----------+----------+-----
+ Data      | svc-100      | 08:34:00 |      576 |   1
+ Data      | svc-325      | 08:20:00 |      559 |   2
+ Data      | svc-300      | 08:12:00 |      577 |   3
+ Identity  | svc-51       | 08:18:00 |      584 |   1
+ Identity  | svc-226      | 08:16:00 |      621 |   2
+ Identity  | svc-201      | 08:15:00 |      591 |   3
+ Platform  | svc-327      | 08:19:00 |      553 |   1
+ Platform  | svc-127      | 08:13:00 |      613 |   2
+ Platform  | svc-252      | 08:10:00 |      593 |   3
+ Team 1    | svc-378      | 08:24:00 |      599 |   1
+ Team 1    | svc-178      | 08:22:00 |      622 |   2
+ Team 1    | svc-128      | 08:19:00 |      582 |   3
+(12 rows)
+
+WITH load AS (
+    SELECT ir.engineer_id, count(*) AS sev1_commands
+    FROM incident_responder ir
+    JOIN incident i USING (incident_id)
+    WHERE ir.role = 'commander' AND i.severity_code = 'SEV1'
+      AND i.opened_at >= '2026-07-01' AND i.opened_at < '2026-10-01'
+    GROUP BY ir.engineer_id
+)
+SELECT e.full_name, l.sev1_commands,
+       round((SELECT avg(sev1_commands) FROM load), 1) AS avg_load
+FROM load l JOIN engineer e USING (engineer_id)
+WHERE l.sev1_commands > 1.10 * (SELECT avg(sev1_commands) FROM load)
+ORDER BY l.sev1_commands DESC
+LIMIT 10;
+  full_name   | sev1_commands | avg_load 
+--------------+---------------+----------
+ Engineer 43  |            35 |     21.7
+ Engineer 61  |            33 |     21.7
+ Engineer 47  |            33 |     21.7
+ Engineer 216 |            32 |     21.7
+ Engineer 204 |            31 |     21.7
+ Engineer 13  |            31 |     21.7
+ Engineer 172 |            31 |     21.7
+ Engineer 19  |            30 |     21.7
+ Engineer 27  |            30 |     21.7
+ Engineer 15  |            30 |     21.7
+(10 rows)
+
+SELECT s.service_name, t.team_name, s.region_code
+FROM service s
+JOIN team t USING (team_id)
+WHERE s.tier = 'gold'
+  AND NOT EXISTS (
+        SELECT 1 FROM incident i
+        WHERE i.service_id = s.service_id
+          AND i.severity_code = 'SEV1'
+          AND i.opened_at >= '2026-09-01' AND i.opened_at < '2026-09-16')
+ORDER BY s.service_name;
+ service_name | team_name |     region_code      
+--------------+-----------+----------------------
+ svc-10       | Team 8    | southeastasia
+ svc-152      | Platform  | ap-southeast-2
+ svc-29       | Team 2    | us-east-1
+ svc-317      | Team 15   | australiaeast
+ svc-33       | Team 6    | australia-southeast1
+ svc-370      | Team 18   | australia-southeast1
+ svc-375      | Data      | us-central1
+ svc-8        | Team 6    | australiaeast
+(8 rows)
+
+WITH monthly AS (
+    SELECT r.cloud_provider,
+           date_trunc('month', i.opened_at)::date AS month,
+           count(*) AS high_sev
+    FROM incident i
+    JOIN service s USING (service_id)
+    JOIN region  r USING (region_code)
+    WHERE i.severity_code IN ('SEV1','SEV2')
+      AND i.opened_at >= '2026-04-01'
+    GROUP BY 1, 2
+)
+SELECT cloud_provider, month, high_sev,
+       high_sev - LAG(high_sev) OVER w                                        AS delta,
+       round(100.0 * (high_sev - LAG(high_sev) OVER w) / LAG(high_sev) OVER w, 1) AS pct_change
+FROM monthly
+WINDOW w AS (PARTITION BY cloud_provider ORDER BY month)
+ORDER BY cloud_provider, month;
+ cloud_provider |   month    | high_sev | delta | pct_change 
+----------------+------------+----------+-------+------------
+ AWS            | 2026-04-01 |     3075 |       |           
+ AWS            | 2026-05-01 |     3269 |   194 |        6.3
+ AWS            | 2026-06-01 |     3049 |  -220 |       -6.7
+ AWS            | 2026-07-01 |     3210 |   161 |        5.3
+ AWS            | 2026-08-01 |     3300 |    90 |        2.8
+ AWS            | 2026-09-01 |     3010 |  -290 |       -8.8
+ Azure          | 2026-04-01 |     1974 |       |           
+ Azure          | 2026-05-01 |     2016 |    42 |        2.1
+ Azure          | 2026-06-01 |     2039 |    23 |        1.1
+ Azure          | 2026-07-01 |     2071 |    32 |        1.6
+ Azure          | 2026-08-01 |     2123 |    52 |        2.5
+ Azure          | 2026-09-01 |     1943 |  -180 |       -8.5
+ GCP            | 2026-04-01 |     2033 |       |           
+ GCP            | 2026-05-01 |     2022 |   -11 |       -0.5
+ GCP            | 2026-06-01 |     1964 |   -58 |       -2.9
+ GCP            | 2026-07-01 |     2111 |   147 |        7.5
+ GCP            | 2026-08-01 |     2055 |   -56 |       -2.7
+ GCP            | 2026-09-01 |     1884 |  -171 |       -8.3
+(18 rows)
+
+WITH daily AS (
+    SELECT opened_at::date AS day, count(*) AS sev1
+    FROM incident
+    WHERE severity_code = 'SEV1'
+      AND opened_at >= '2026-09-01' AND opened_at < '2026-10-01'
+    GROUP BY 1
+)
+SELECT day, sev1,
+       round(avg(sev1) OVER (ORDER BY day ROWS BETWEEN 6 PRECEDING AND CURRENT ROW), 2) AS moving_avg_7d
+FROM daily
+ORDER BY day
+LIMIT 10;
+    day     | sev1 | moving_avg_7d 
+------------+------+---------------
+ 2026-09-01 |   62 |         62.00
+ 2026-09-02 |   58 |         60.00
+ 2026-09-03 |   60 |         60.00
+ 2026-09-04 |   59 |         59.75
+ 2026-09-05 |   48 |         57.40
+ 2026-09-06 |   52 |         56.50
+ 2026-09-07 |   60 |         57.00
+ 2026-09-08 |   66 |         57.57
+ 2026-09-09 |   54 |         57.00
+ 2026-09-10 |   69 |         58.29
+(10 rows)
+
+SELECT CASE WHEN GROUPING(r.cloud_provider) = 1 THEN 'ALL PROVIDERS' ELSE r.cloud_provider END AS provider,
+       CASE WHEN GROUPING(s.tier) = 1 THEN 'all tiers' ELSE s.tier END AS tier,
+       count(*) AS incidents,
+       count(*) FILTER (WHERE i.severity_code = 'SEV1') AS sev1
+FROM incident i
+JOIN service s USING (service_id)
+JOIN region  r USING (region_code)
+WHERE i.opened_at >= '2026-01-01'
+GROUP BY ROLLUP (r.cloud_provider, s.tier)
+ORDER BY GROUPING(r.cloud_provider), provider, GROUPING(s.tier), tier;
+   provider    |   tier    | incidents | sev1  
+---------------+-----------+-----------+-------
+ AWS           | bronze    |     75720 |  2904
+ AWS           | gold      |     38217 |  1602
+ AWS           | silver    |     63171 |  2631
+ AWS           | all tiers |    177108 |  7137
+ Azure         | bronze    |     48905 |  1937
+ Azure         | gold      |     22387 |   913
+ Azure         | silver    |     43723 |  1729
+ Azure         | all tiers |    115015 |  4579
+ GCP           | bronze    |     42858 |  1660
+ GCP           | gold      |     19281 |   794
+ GCP           | silver    |     51775 |  2110
+ GCP           | all tiers |    113914 |  4564
+ ALL PROVIDERS | all tiers |    406037 | 16280
+(13 rows)
+
